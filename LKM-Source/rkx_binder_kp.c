@@ -152,8 +152,7 @@ static int __nocfi binder_proc_transaction_pre(struct kprobe* p, struct pt_regs*
 		if (t_outdated) {
 			struct binder_buffer* buffer = t_outdated->buffer;
 			rkx_log_debug("free_outdated uid=%u debug_id=%d data_size=%zu\n",
-				task_uid(proc->tsk).val, t_outdated->debug_id,
-				buffer->data_size);
+				task_uid(proc->tsk).val, t_outdated->debug_id, buffer->data_size);
 			t_outdated->buffer = NULL;
 			buffer->transaction = NULL;
 			binder_release_entire_buffer(proc, NULL, buffer, false);
