@@ -13,11 +13,13 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/kprobes.h>
+#include <linux/string.h>
 #include "../android/binder_internal.h"
 
 static unsigned long (*re_kallsyms_lookup_name)(const char* name);
 static void (*re_binder_transaction_buffer_release)(struct binder_proc* proc, struct binder_thread* thread, struct binder_buffer* buffer, binder_size_t off_end_offset, bool is_failure);
 static void (*re_binder_alloc_free_buf)(struct binder_alloc* alloc, struct binder_buffer* buffer);
+static int (*re_binder_alloc_copy_from_buffer)(struct binder_alloc* alloc, void* dest, struct binder_buffer* buffer, binder_size_t buffer_offset, size_t bytes);
 static struct binder_stats(*re_binder_stats);
 
 static inline void binder_inner_proc_lock(struct binder_proc* proc)
@@ -44,23 +46,74 @@ __releases(&node->lock)
 	spin_unlock(&node->lock);
 }
 
+/* Compare binder buffer payload (data + offsets). Non-sleeping copy. */
+static bool binder_buffer_payload_equal(struct binder_proc* proc,
+	struct binder_buffer* a, struct binder_buffer* b)
+{
+	size_t off, n, total;
+	binder_size_t offsets_start;
+	u8 ba[64];
+	u8 bb[64];
+
+	if (!proc || !a || !b || !re_binder_alloc_copy_from_buffer)
+		return false;
+	if (a->data_size != b->data_size || a->offsets_size != b->offsets_size)
+		return false;
+
+	total = a->data_size;
+	for (off = 0; off < total; off += n) {
+		n = total - off;
+		if (n > sizeof(ba))
+			n = sizeof(ba);
+		if (re_binder_alloc_copy_from_buffer(&proc->alloc, ba, a, off, n))
+			return false;
+		if (re_binder_alloc_copy_from_buffer(&proc->alloc, bb, b, off, n))
+			return false;
+		if (memcmp(ba, bb, n))
+			return false;
+	}
+
+	if (a->offsets_size == 0)
+		return true;
+
+	offsets_start = ALIGN(a->data_size, sizeof(void*));
+	total = a->offsets_size;
+	for (off = 0; off < total; off += n) {
+		n = total - off;
+		if (n > sizeof(ba))
+			n = sizeof(ba);
+		if (re_binder_alloc_copy_from_buffer(&proc->alloc, ba, a,
+				offsets_start + off, n))
+			return false;
+		if (re_binder_alloc_copy_from_buffer(&proc->alloc, bb, b,
+				offsets_start + off, n))
+			return false;
+		if (memcmp(ba, bb, n))
+			return false;
+	}
+	return true;
+}
+
 static bool binder_can_update_transaction(struct binder_transaction* t1, struct binder_transaction* t2)
 {
 	if ((t1->flags & t2->flags & TF_ONE_WAY) != TF_ONE_WAY || !t1->to_proc || !t2->to_proc)
 		return false;
+	if (!t1->buffer || !t2->buffer)
+		return false;
 	if (t1->to_proc->tsk == t2->to_proc->tsk && t1->code == t2->code &&
 		t1->flags == t2->flags && t1->buffer->pid == t2->buffer->pid &&
 		t1->buffer->target_node->ptr == t2->buffer->target_node->ptr &&
-		t1->buffer->target_node->cookie == t2->buffer->target_node->cookie)
+		t1->buffer->target_node->cookie == t2->buffer->target_node->cookie &&
+		binder_buffer_payload_equal(t1->to_proc, t1->buffer, t2->buffer))
 		return true;
 	return false;
 }
 
+/* First match on async_todo is the oldest backlog (FIFO). */
 static struct binder_transaction* binder_find_outdated_transaction_ilocked(struct binder_transaction* t,
 	struct list_head* target_list)
 {
 	struct binder_work* w;
-	bool second = false;
 
 	list_for_each_entry(w, target_list, entry) {
 		struct binder_transaction* t_queued;
@@ -68,12 +121,8 @@ static struct binder_transaction* binder_find_outdated_transaction_ilocked(struc
 		if (w->type != BINDER_WORK_TRANSACTION)
 			continue;
 		t_queued = container_of(w, struct binder_transaction, work);
-		if (binder_can_update_transaction(t_queued, t)) {
-			if (second)
-				return t_queued;
-			else
-				second = true;
-		}
+		if (binder_can_update_transaction(t_queued, t))
+			return t_queued;
 	}
 	return NULL;
 }
@@ -158,9 +207,11 @@ void __nocfi register_binder_kp(void) {
 
 	re_binder_transaction_buffer_release = (void*)re_kallsyms_lookup_name("binder_transaction_buffer_release");
 	re_binder_alloc_free_buf = (void*)re_kallsyms_lookup_name("binder_alloc_free_buf");
+	re_binder_alloc_copy_from_buffer = (void*)re_kallsyms_lookup_name("binder_alloc_copy_from_buffer");
 	re_binder_stats = (void*)re_kallsyms_lookup_name("binder_stats");
 
-	if (re_binder_transaction_buffer_release == NULL || re_binder_alloc_free_buf == NULL || re_binder_stats == NULL) {
+	if (re_binder_transaction_buffer_release == NULL || re_binder_alloc_free_buf == NULL ||
+	    re_binder_alloc_copy_from_buffer == NULL || re_binder_stats == NULL) {
 		rkx_log_err("resolve binder symbols failed (binder async-cleanup disabled)\n");
 		return;
 	}
