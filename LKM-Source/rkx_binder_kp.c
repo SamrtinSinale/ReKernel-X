@@ -46,18 +46,24 @@ __releases(&node->lock)
 	spin_unlock(&node->lock);
 }
 
-/* Compare binder buffer payload (data + offsets). Non-sleeping copy. */
-static bool binder_buffer_payload_equal(struct binder_proc* proc,
+/*
+ * Only free pure-data, small parcels: no nested binder/fd objects
+ * (offsets_size == 0) and data_size under this limit. Larger or
+ * object-carrying txns are left alone (e.g. IME / window callbacks).
+ */
+#define RKX_FREE_MAX_DATA_SIZE 512
+
+/* Compare pure-data binder buffer payload. Non-sleeping copy. */
+static bool binder_buffer_data_equal(struct binder_proc* proc,
 	struct binder_buffer* a, struct binder_buffer* b)
 {
 	size_t off, n, total;
-	binder_size_t offsets_start;
 	u8 ba[64];
 	u8 bb[64];
 
 	if (!proc || !a || !b || !re_binder_alloc_copy_from_buffer)
 		return false;
-	if (a->data_size != b->data_size || a->offsets_size != b->offsets_size)
+	if (a->data_size != b->data_size)
 		return false;
 
 	total = a->data_size;
@@ -72,25 +78,6 @@ static bool binder_buffer_payload_equal(struct binder_proc* proc,
 		if (memcmp(ba, bb, n))
 			return false;
 	}
-
-	if (a->offsets_size == 0)
-		return true;
-
-	offsets_start = ALIGN(a->data_size, sizeof(void*));
-	total = a->offsets_size;
-	for (off = 0; off < total; off += n) {
-		n = total - off;
-		if (n > sizeof(ba))
-			n = sizeof(ba);
-		if (re_binder_alloc_copy_from_buffer(&proc->alloc, ba, a,
-				offsets_start + off, n))
-			return false;
-		if (re_binder_alloc_copy_from_buffer(&proc->alloc, bb, b,
-				offsets_start + off, n))
-			return false;
-		if (memcmp(ba, bb, n))
-			return false;
-	}
 	return true;
 }
 
@@ -100,11 +87,17 @@ static bool binder_can_update_transaction(struct binder_transaction* t1, struct 
 		return false;
 	if (!t1->buffer || !t2->buffer)
 		return false;
+	/* skip parcels with binder/fd objects or oversized data */
+	if (t1->buffer->offsets_size != 0 || t2->buffer->offsets_size != 0)
+		return false;
+	if (t1->buffer->data_size > RKX_FREE_MAX_DATA_SIZE ||
+	    t2->buffer->data_size > RKX_FREE_MAX_DATA_SIZE)
+		return false;
 	if (t1->to_proc->tsk == t2->to_proc->tsk && t1->code == t2->code &&
 		t1->flags == t2->flags && t1->buffer->pid == t2->buffer->pid &&
 		t1->buffer->target_node->ptr == t2->buffer->target_node->ptr &&
 		t1->buffer->target_node->cookie == t2->buffer->target_node->cookie &&
-		binder_buffer_payload_equal(t1->to_proc, t1->buffer, t2->buffer))
+		binder_buffer_data_equal(t1->to_proc, t1->buffer, t2->buffer))
 		return true;
 	return false;
 }
