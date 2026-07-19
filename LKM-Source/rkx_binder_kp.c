@@ -59,7 +59,7 @@ static bool binder_buffer_data_equal(struct binder_proc* proc,
 		return false;
 	if (a->data_size != b->data_size)
 		return false;
-	if (a->offsets_size != 0 || a->offsets_size != 0)
+	if (a->offsets_size != 0 || b->offsets_size != 0)
 		return false;
 
 	total = a->data_size;
