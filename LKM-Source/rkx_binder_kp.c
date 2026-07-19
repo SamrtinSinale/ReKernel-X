@@ -6,6 +6,7 @@
 
 #include "rkx_log.h"
 #include "rkx.h"
+#include "rkx_binder_alloc.h"
 #include <linux/printk.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -14,6 +15,7 @@
 #include <linux/slab.h>
 #include <linux/kprobes.h>
 #include <linux/string.h>
+#include <linux/version.h>
 #include "../android/binder_internal.h"
 
 static unsigned long (*re_kallsyms_lookup_name)(const char* name);
@@ -46,7 +48,6 @@ __releases(&node->lock)
 	spin_unlock(&node->lock);
 }
 
-/* Compare pure-data binder buffer payload. Non-sleeping copy. */
 static bool binder_buffer_data_equal(struct binder_proc* proc,
 	struct binder_buffer* b1, struct binder_buffer* b2)
 {
@@ -188,7 +189,11 @@ void __nocfi register_binder_kp(void) {
 
 	re_binder_transaction_buffer_release = (void*)re_kallsyms_lookup_name("binder_transaction_buffer_release");
 	re_binder_alloc_free_buf = (void*)re_kallsyms_lookup_name("binder_alloc_free_buf");
-	re_binder_alloc_copy_from_buffer = (void*)re_kallsyms_lookup_name("binder_alloc_copy_from_buffer");
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 0, 0)
+	re_binder_alloc_copy_from_buffer = rkx_binder_copy_from_buffer;
+#else
+	re_binder_alloc_copy_from_buffer = (void *)re_kallsyms_lookup_name("binder_alloc_copy_from_buffer");
+#endif
 	re_binder_stats = (void*)re_kallsyms_lookup_name("binder_stats");
 
 	if (re_binder_transaction_buffer_release == NULL || re_binder_alloc_free_buf == NULL ||
