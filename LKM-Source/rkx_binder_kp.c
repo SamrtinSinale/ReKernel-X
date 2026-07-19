@@ -189,11 +189,7 @@ void __nocfi register_binder_kp(void) {
 
 	re_binder_transaction_buffer_release = (void*)re_kallsyms_lookup_name("binder_transaction_buffer_release");
 	re_binder_alloc_free_buf = (void*)re_kallsyms_lookup_name("binder_alloc_free_buf");
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 0, 0)
-	re_binder_alloc_copy_from_buffer = rkx_binder_copy_from_buffer;
-#else
 	re_binder_alloc_copy_from_buffer = (void *)re_kallsyms_lookup_name("binder_alloc_copy_from_buffer");
-#endif
 	re_binder_stats = (void*)re_kallsyms_lookup_name("binder_stats");
 
 	if (re_binder_transaction_buffer_release == NULL || re_binder_alloc_free_buf == NULL ||
