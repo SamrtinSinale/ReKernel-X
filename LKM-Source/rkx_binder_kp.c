@@ -46,16 +46,11 @@ __releases(&node->lock)
 	spin_unlock(&node->lock);
 }
 
-/*
- * Only free pure-data parcels: no nested binder/fd objects
- * (offsets_size == 0). Object-carrying txns are left alone
- * (e.g. IME / window callbacks with binders).
- */
-
 /* Compare pure-data binder buffer payload. Non-sleeping copy. */
 static bool binder_buffer_data_equal(struct binder_proc* proc,
 	struct binder_buffer* a, struct binder_buffer* b)
 {
+
 	size_t off, n, total;
 	u8 ba[64];
 	u8 bb[64];
@@ -63,6 +58,8 @@ static bool binder_buffer_data_equal(struct binder_proc* proc,
 	if (!proc || !a || !b || !re_binder_alloc_copy_from_buffer)
 		return false;
 	if (a->data_size != b->data_size)
+		return false;
+	if (a->offsets_size != 0 || a->offsets_size != 0)
 		return false;
 
 	total = a->data_size;
@@ -84,21 +81,14 @@ static bool binder_can_update_transaction(struct binder_transaction* t1, struct 
 {
 	if ((t1->flags & t2->flags & TF_ONE_WAY) != TF_ONE_WAY || !t1->to_proc || !t2->to_proc)
 		return false;
-	if (!t1->buffer || !t2->buffer)
-		return false;
-	/* skip parcels with binder/fd objects */
-	if (t1->buffer->offsets_size != 0 || t2->buffer->offsets_size != 0)
-		return false;
 	if (t1->to_proc->tsk == t2->to_proc->tsk && t1->code == t2->code &&
 		t1->flags == t2->flags && t1->buffer->pid == t2->buffer->pid &&
 		t1->buffer->target_node->ptr == t2->buffer->target_node->ptr &&
-		t1->buffer->target_node->cookie == t2->buffer->target_node->cookie &&
-		binder_buffer_data_equal(t1->to_proc, t1->buffer, t2->buffer))
-		return true;
+		t1->buffer->target_node->cookie == t2->buffer->target_node->cookie)
+		return binder_buffer_data_equal(t1->to_proc, t1->buffer, t2->buffer);
 	return false;
 }
 
-/* First match on async_todo is the oldest backlog (FIFO). */
 static struct binder_transaction* binder_find_outdated_transaction_ilocked(struct binder_transaction* t,
 	struct list_head* target_list)
 {
