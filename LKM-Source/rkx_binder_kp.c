@@ -48,31 +48,32 @@ __releases(&node->lock)
 
 /* Compare pure-data binder buffer payload. Non-sleeping copy. */
 static bool binder_buffer_data_equal(struct binder_proc* proc,
-	struct binder_buffer* a, struct binder_buffer* b)
+	struct binder_buffer* b1, struct binder_buffer* b2)
 {
+	size_t pos, chunk, total;
+	u8 c1[64];
+	u8 c2[64];
 
-	size_t off, n, total;
-	u8 ba[64];
-	u8 bb[64];
-
-	if (!proc || !a || !b || !re_binder_alloc_copy_from_buffer)
+	if (!proc || !b1 || !b2 || !re_binder_alloc_copy_from_buffer)
 		return false;
-	if (a->data_size != b->data_size)
+	if (b1->data_size != b2->data_size)
 		return false;
-	if (a->offsets_size != 0 || b->offsets_size != 0)
+	if (b1->offsets_size != 0 || b2->offsets_size != 0)
 		return false;
 
-	total = a->data_size;
-	for (off = 0; off < total; off += n) {
-		n = total - off;
-		if (n > sizeof(ba))
-			n = sizeof(ba);
-		if (re_binder_alloc_copy_from_buffer(&proc->alloc, ba, a, off, n))
+	total = b1->data_size;
+	pos = 0;
+	while (pos < total) {
+		chunk = total - pos;
+		if (chunk > sizeof(c1))
+			chunk = sizeof(c1);
+		if (re_binder_alloc_copy_from_buffer(&proc->alloc, c1, b1, pos, chunk))
 			return false;
-		if (re_binder_alloc_copy_from_buffer(&proc->alloc, bb, b, off, n))
+		if (re_binder_alloc_copy_from_buffer(&proc->alloc, c2, b2, pos, chunk))
 			return false;
-		if (memcmp(ba, bb, n))
+		if (memcmp(c1, c2, chunk))
 			return false;
+		pos += chunk;
 	}
 	return true;
 }
